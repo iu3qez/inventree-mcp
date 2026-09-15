@@ -174,21 +174,64 @@ func RegisterUpdateCategory(server *mcp.Server, c *client.Client, r *coerce.Regi
 // -- Delete Part Category --
 
 type DeleteCategoryInput struct {
-	ID int `json:"id" jsonschema:"The category ID (pk) to delete"`
+	ID                    int  `json:"id" jsonschema:"The category ID (pk) to delete"`
+	DeleteParts           bool `json:"delete_parts,omitempty" jsonschema:"Delete any parts still in the category. Default false, which moves them to the parent category instead."`
+	DeleteChildCategories bool `json:"delete_child_categories,omitempty" jsonschema:"Delete any sub-categories. Default false, which moves them to the parent category instead."`
 }
 
 func RegisterDeleteCategory(server *mcp.Server, c *client.Client, r *coerce.Registry) {
 	coerce.AddTool(server, r, &mcp.Tool{
-		Name:        "delete_part_category",
-		Description: "Delete a part category. The category must have no parts or sub-categories.",
+		Name: "delete_part_category",
+		Description: "Delete a part category. This is destructive and cannot be undone. " +
+			"The category does not have to be empty: by default any parts and sub-categories it still holds are MOVED to its parent category (or left uncategorised if it has no parent), not deleted. " +
+			"Set delete_parts or delete_child_categories to true to delete the contents along with the category. " +
+			"The result reports what happened to the contents.",
 		Annotations: &mcp.ToolAnnotations{
 			DestructiveHint: boolPtr(true),
 		},
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input DeleteCategoryInput) (*mcp.CallToolResult, any, error) {
 		path := fmt.Sprintf("/api/part/category/%d/", input.ID)
-		if err := c.Delete(path); err != nil {
+
+		// Read the category before it is gone, so the result can say what
+		// became of its contents.
+		var existing PartCategory
+		if err := c.Get(path+"?format=json", &existing); err != nil {
+			return errResult(fmt.Errorf("looking up category %d: %w", input.ID, err)), nil, nil
+		}
+
+		// InvenTree puts these on the delete serializer and rejects a
+		// body-less DELETE with "This field is required."
+		err := c.DeleteWithBody(path, map[string]any{
+			"delete_parts":            input.DeleteParts,
+			"delete_child_categories": input.DeleteChildCategories,
+		})
+		if err != nil {
 			return errResult(fmt.Errorf("deleting category %d: %w", input.ID, err)), nil, nil
 		}
-		return textResult(fmt.Sprintf("Category %d deleted successfully.", input.ID))
+
+		var deleted, moved []string
+		if existing.PartCount > 0 {
+			s := countOf(existing.PartCount, "part", "parts")
+			if input.DeleteParts {
+				deleted = append(deleted, s)
+			} else {
+				moved = append(moved, s)
+			}
+		}
+		if existing.Subcategories > 0 {
+			s := countOf(existing.Subcategories, "sub-category", "sub-categories")
+			if input.DeleteChildCategories {
+				deleted = append(deleted, s)
+			} else {
+				moved = append(moved, s)
+			}
+		}
+		destination := "the parent category"
+		if existing.Parent == nil {
+			destination = "no category (now uncategorised)"
+		}
+
+		return textResult(fmt.Sprintf("Category %d (%s) deleted successfully.%s",
+			input.ID, existing.Name, deletionSummary(deleted, moved, destination)))
 	})
 }

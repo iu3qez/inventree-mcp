@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -24,11 +25,20 @@ type fakeInvenTree struct {
 	// mimicking a server older than API v430.
 	legacyParameterAPI bool
 
+	// uploadedImage records the last multipart image PATCHed onto a part.
+	uploadedImage *uploadedImage
+
 	templates  map[string]int            // template name -> pk
 	parameters map[int]string            // template pk -> value
 	companies  map[string]map[string]any // lowercased name -> company record
 
 	nextPK int
+}
+
+type uploadedImage struct {
+	fileName    string
+	contentType string
+	size        int
 }
 
 func newFakeInvenTree() *fakeInvenTree {
@@ -85,7 +95,7 @@ func (f *fakeInvenTree) handle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	body := map[string]any{}
-	if r.Body != nil {
+	if r.Body != nil && !strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
 		_ = json.NewDecoder(r.Body).Decode(&body)
 	}
 
@@ -134,6 +144,10 @@ func (f *fakeInvenTree) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, paginated(results))
 
+	// -- instance settings: InvenTree wants a currency on every company --
+	case strings.HasPrefix(path, "/api/settings/global/"):
+		writeJSON(w, http.StatusOK, map[string]any{"value": "EUR"})
+
 	// -- companies --
 	case path == "/api/company/":
 		if r.Method == http.MethodPost {
@@ -170,6 +184,25 @@ func (f *fakeInvenTree) handle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		http.Error(w, "no such company", http.StatusNotFound)
+
+	// -- part image upload (multipart) --
+	case strings.HasPrefix(path, "/api/part/") && r.Method == http.MethodPatch &&
+		strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data"):
+		file, header, err := r.FormFile("image")
+		if err != nil {
+			http.Error(w, "no image field: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		defer file.Close()
+		content, _ := io.ReadAll(file)
+		f.uploadedImage = &uploadedImage{
+			fileName:    header.Filename,
+			contentType: header.Header.Get("Content-Type"),
+			size:        len(content),
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"pk": 42, "name": "uploaded", "image": "/media/part_images/uploaded.png",
+		})
 
 	// -- parts --
 	case path == "/api/part/" && r.Method == http.MethodPost:
@@ -528,5 +561,68 @@ func TestGetOrCreateCompanyWidensRoles(t *testing.T) {
 	company, _ := out["company"].(map[string]any)
 	if company["is_supplier"] != true || company["is_manufacturer"] != true {
 		t.Errorf("roles were not widened: %v", company)
+	}
+}
+
+// pngBytes is the PNG magic number, which is all http.DetectContentType needs
+// to call this an image.
+var pngBytes = []byte("\x89PNG\r\n\x1a\n" + strings.Repeat("\x00", 32))
+
+// TestSetPartImageUploadsBytes checks the image is fetched here and PATCHed to
+// InvenTree as multipart file bytes. The remote_image field this used to rely
+// on was removed from the Part API in v489, and because DRF drops unknown keys
+// silently, sending it returned HTTP 200 and left the part with no image.
+func TestSetPartImageUploadsBytes(t *testing.T) {
+	images := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(pngBytes)
+	}))
+	t.Cleanup(images.Close)
+
+	fake := newFakeInvenTree()
+	session := connect(t, fake.start(t))
+
+	callTool(t, session, "set_part_image", map[string]any{
+		"id":        42,
+		"image_url": images.URL + "/photo.png",
+	})
+
+	if fake.uploadedImage == nil {
+		t.Fatal("no multipart upload reached the server")
+	}
+	if got := fake.uploadedImage.fileName; got != "photo.png" {
+		t.Errorf("file name = %q, want photo.png", got)
+	}
+	if got := fake.uploadedImage.contentType; got != "image/png" {
+		t.Errorf("content type = %q, want image/png", got)
+	}
+	if got := fake.uploadedImage.size; got != len(pngBytes) {
+		t.Errorf("uploaded %d bytes, want %d", got, len(pngBytes))
+	}
+}
+
+// TestSetPartImageRejectsNonImage checks a URL that does not serve an image is
+// reported instead of being uploaded as whatever it is.
+func TestSetPartImageRejectsNonImage(t *testing.T) {
+	html := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("<!DOCTYPE html><html><body>not an image</body></html>"))
+	}))
+	t.Cleanup(html.Close)
+
+	fake := newFakeInvenTree()
+	session := connect(t, fake.start(t))
+
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "set_part_image",
+		Arguments: map[string]any{"id": 42, "image_url": html.URL + "/page"},
+	})
+	if err != nil {
+		t.Fatalf("calling set_part_image: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("expected an error for a non-image URL")
+	}
+	if fake.uploadedImage != nil {
+		t.Error("nothing should have been uploaded")
 	}
 }

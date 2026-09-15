@@ -124,8 +124,17 @@ func getOrCreateCompany(c *client.Client, name, description, website string, sup
 		return updated, "existing", nil
 	}
 
+	// InvenTree requires a currency on every company but does not default it
+	// on the API, so a create without one is rejected.
+	currency, err := defaultCurrency(c)
+	if err != nil {
+		return nil, "", fmt.Errorf("currency is required by InvenTree and the instance default could not be read (%w) - "+
+			"create the company in InvenTree, or set a default currency in the instance settings", err)
+	}
+
 	payload := map[string]any{
 		"name":            name,
+		"currency":        currency,
 		"is_supplier":     supplier,
 		"is_manufacturer": manufacturer,
 		"is_customer":     customer,
@@ -420,4 +429,19 @@ func RegisterGetPartSourcing(server *mcp.Server, c *client.Client, r *coerce.Reg
 			"supplier_parts":     sup.Results,
 		})
 	})
+}
+
+// defaultCurrency reads the instance-wide default currency, which InvenTree
+// requires on every company but does not fill in itself on the API.
+func defaultCurrency(c *client.Client) (string, error) {
+	var setting struct {
+		Value string `json:"value"`
+	}
+	if err := c.Get("/api/settings/global/INVENTREE_DEFAULT_CURRENCY/?format=json", &setting); err != nil {
+		return "", err
+	}
+	if setting.Value == "" {
+		return "", fmt.Errorf("instance reports an empty default currency")
+	}
+	return setting.Value, nil
 }

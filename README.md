@@ -13,7 +13,7 @@ An [MCP](https://modelcontextprotocol.io/) (Model Context Protocol) server that 
 
 ## Features
 
-- **36 MCP tools** covering parts, stock, locations, categories, parameters and sourcing
+- **42 MCP tools** covering parts, stock, locations, categories, parameters, sourcing and pricing
 - **Fuzzy search** — say "green box" and it finds "Green 1"
 - **Hierarchical navigation** — locations and categories with full path display
 - **Stock management** — add, remove, transfer, and track inventory
@@ -169,7 +169,8 @@ Restart Claude Desktop. You should see a hammer icon indicating MCP tools are av
 | `create_part` | Create a new part |
 | `update_part` | Update part fields (name, description, category, etc.) |
 | `delete_part` | Delete a part (auto-deactivates first) |
-| `set_part_image` | Attach an image to a part via URL |
+| `set_part_image` | Set a part's image: downloaded here, uploaded as file bytes |
+| `upload_part_image` | Same as `set_part_image`, under a name that says what it does |
 | `search_part_images` | Find product images via Google (requires API keys) |
 
 ### Stock
@@ -183,6 +184,7 @@ Restart Claude Desktop. You should see a hammer icon indicating MCP tools are av
 | `stock_remove_quantity` | Remove quantity from existing stock items |
 | `stock_transfer` | Move stock between locations |
 | `delete_stock_item` | Delete a stock entry |
+| `get_stock_history` | Show the movement history of a stock item |
 
 ### Stock Locations
 
@@ -224,6 +226,15 @@ Restart Claude Desktop. You should see a hammer icon indicating MCP tools are av
 | `search_supplier_parts` | Go from a distributor order code back to the part |
 | `get_part_sourcing` | List every MPN and SKU recorded for a part |
 
+### Pricing
+
+| Tool | Description |
+|---|---|
+| `get_supplier_price_breaks` | Read the price tiers of a supplier part |
+| `set_supplier_price_break` | Set the buying price at a quantity (upsert) |
+| `get_sale_price_breaks` | Read a part's sale price tiers |
+| `set_sale_price_break` | Set the selling price at a quantity (upsert) |
+
 ### Component intake
 
 | Tool | Description |
@@ -242,6 +253,22 @@ supplier companies if they do not exist, records the MPN and the SKU, and books 
 stock. Steps are independent: if one fails the others still run and the result says
 what succeeded and what did not. An existing supplier part with the same SKU is
 reused rather than duplicated.
+
+### Notes on InvenTree 1.x
+
+Two behaviours are worth knowing, because both used to fail silently:
+
+- **Part images** are uploaded as file bytes. The `remote_image` field, which asked
+  the InvenTree server to fetch a URL itself, was removed from the Part and Company
+  API in v489. Since DRF drops unknown keys without complaining, writing it returned
+  HTTP 200 and left the part with no image.
+- **Deleting a location or a category** sends a confirmation body. InvenTree puts
+  required fields on the delete serializer for both (`delete_stock_items` /
+  `delete_sub_locations`, `delete_parts` / `delete_child_categories`), and rejects a
+  body-less DELETE. Neither has to be empty: by default the contents move up to the
+  parent, and the result says what happened to them.
+- **Tags** are off by default on read endpoints since v434, so the part tools ask for
+  them explicitly with `tags=true`.
 
 ## How It Works
 
@@ -299,6 +326,7 @@ internal/
     parameters.go              Part parameter and template tools
     companies.go               Company, manufacturer part, supplier part tools
     intake.go                  End-to-end component intake tool
+    pricing.go                 Supplier and sale price break tools
     register.go                Tool registration orchestrator
     intake_test.go             Unit tests against a fake InvenTree server
     tools_integration_test.go  Integration tests

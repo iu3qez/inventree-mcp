@@ -64,8 +64,17 @@ internal/
   - `/api/company/part/manufacturer/` - Manufacturer parts (MPN)
   - `/api/company/part/` - Supplier parts (distributor SKU)
   - `/api/parameter/` and `/api/parameter/template/` - Parameters and templates
+  - `/api/company/price-break/` - Supplier price breaks; `/api/part/sale-price/` - sale price breaks
 - All resources support standard CRUD. Many support `/metadata/` sub-endpoints and bulk operations.
 - Pagination is Django REST Framework style.
+- **`remote_image` was removed in API v489** (Part and Company). Images must be uploaded as
+  multipart file bytes (`client.PatchMultipart`); see `attachPartImage` in `internal/tools/parts.go`.
+  DRF ignores unknown keys, so writing `remote_image` returns HTTP 200 and silently does nothing.
+- **Stock locations and part categories need a confirmation body on DELETE** - they put required
+  fields on the delete serializer. Use `client.DeleteWithBody`, not `client.Delete`.
+- **Tags are off by default on read endpoints since v434**: pass `tags=true` to get them back.
+- **Companies require a currency on creation** and InvenTree does not default it on the API;
+  `defaultCurrency` reads `/api/settings/global/INVENTREE_DEFAULT_CURRENCY/`.
 - **Parameter endpoints changed in API v430** (2025-12-04): `/api/part/parameter/` and
   `/api/part/parameter/template/` were removed in favour of the generic `/api/parameter/`
   endpoints, which address the owner via `model_type=part` + `model_id`. `internal/tools/parameters.go`

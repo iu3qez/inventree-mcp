@@ -86,6 +86,17 @@ func RegisterIntakePart(server *mcp.Server, c *client.Client, res *paramAPIResol
 			partID = created.PK
 			report["part_status"] = "created"
 			report["part"] = created
+
+			// The image has to go up as file bytes in a second call: the
+			// remote_image field was removed from the Part API in v489.
+			if input.ImageURL != "" {
+				withImage, err := attachPartImage(ctx, c, partID, input.ImageURL)
+				if err != nil {
+					problems = append(problems, fmt.Sprintf("image: %v", err))
+				} else {
+					report["part"] = withImage
+				}
+			}
 		} else if _, ok := report["part_status"]; !ok {
 			report["part_status"] = "existing"
 		}
@@ -168,9 +179,6 @@ func createIntakePart(c *client.Client, input IntakePartInput) (*Part, error) {
 	}
 	if input.Link != "" {
 		payload["link"] = input.Link
-	}
-	if input.ImageURL != "" {
-		payload["remote_image"] = input.ImageURL
 	}
 	if input.MinimumStock > 0 {
 		payload["minimum_stock"] = input.MinimumStock

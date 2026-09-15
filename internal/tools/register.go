@@ -22,6 +22,7 @@ func RegisterAll(server *mcp.Server, c *client.Client, imgClient *imagesearch.Cl
 	RegisterDeletePart(server, c, r)
 	RegisterListParts(server, c, r)
 	RegisterSetPartImage(server, c, r)
+	RegisterUploadPartImage(server, c, r)
 	RegisterSearchPartImages(server, imgClient, r)
 
 	// Stock
@@ -32,6 +33,7 @@ func RegisterAll(server *mcp.Server, c *client.Client, imgClient *imagesearch.Cl
 	RegisterStockRemove(server, c, r)
 	RegisterStockTransfer(server, c, r)
 	RegisterDeleteStockItem(server, c, r)
+	RegisterGetStockHistory(server, c, r)
 
 	// Locations
 	RegisterSearchLocations(server, c, r)
@@ -62,6 +64,12 @@ func RegisterAll(server *mcp.Server, c *client.Client, imgClient *imagesearch.Cl
 	RegisterCreateSupplierPart(server, c, r)
 	RegisterSearchSupplierParts(server, c, r)
 	RegisterGetPartSourcing(server, c, r)
+
+	// Pricing
+	RegisterGetSupplierPriceBreaks(server, c, r)
+	RegisterSetSupplierPriceBreak(server, c, r)
+	RegisterGetSalePriceBreaks(server, c, r)
+	RegisterSetSalePriceBreak(server, c, r)
 
 	// End-to-end component intake
 	RegisterIntakePart(server, c, paramRes, r)
