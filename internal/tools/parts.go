@@ -33,9 +33,15 @@ type Part struct {
 	Component    bool     `json:"component"`
 	Trackable    bool     `json:"trackable"`
 	Virtual      bool     `json:"virtual"`
+	Salable      bool     `json:"salable"`
+	Revision     string   `json:"revision"`
 	Image        *string  `json:"image"`
 	Thumbnail    *string  `json:"thumbnail"`
 	Tags         []string `json:"tags"`
+
+	// DefaultLocation is the stock location new stock of this part is
+	// assigned to by default.
+	DefaultLocation *int `json:"default_location"`
 }
 
 // -- Search Parts --
@@ -101,7 +107,12 @@ type CreatePartInput struct {
 	Assembly     *bool  `json:"assembly,omitempty" jsonschema:"Whether the part is an assembly"`
 	Trackable    *bool  `json:"trackable,omitempty" jsonschema:"Whether the part is trackable by serial number"`
 	Virtual      *bool  `json:"virtual,omitempty" jsonschema:"Whether the part is virtual (not physical)"`
+	Salable      *bool  `json:"salable,omitempty" jsonschema:"Whether the part can be sold to customers"`
 	ImageURL     string `json:"image_url,omitempty" jsonschema:"URL of an image to attach to the part. InvenTree downloads it server-side."`
+
+	Link            string `json:"link,omitempty" jsonschema:"External URL for this part, typically the datasheet"`
+	DefaultLocation int    `json:"default_location,omitempty" jsonschema:"Default stock location ID for new stock of this part. 0 or omit for none."`
+	Revision        string `json:"revision,omitempty" jsonschema:"Part revision designator"`
 }
 
 func RegisterCreatePart(server *mcp.Server, c *client.Client, r *coerce.Registry) {
@@ -148,8 +159,20 @@ func RegisterCreatePart(server *mcp.Server, c *client.Client, r *coerce.Registry
 		if input.Virtual != nil {
 			payload["virtual"] = *input.Virtual
 		}
+		if input.Salable != nil {
+			payload["salable"] = *input.Salable
+		}
 		if input.ImageURL != "" {
 			payload["remote_image"] = input.ImageURL
+		}
+		if input.Link != "" {
+			payload["link"] = input.Link
+		}
+		if input.DefaultLocation != 0 {
+			payload["default_location"] = input.DefaultLocation
+		}
+		if input.Revision != "" {
+			payload["revision"] = input.Revision
 		}
 
 		var created Part
@@ -173,6 +196,16 @@ type UpdatePartInput struct {
 	Units        string `json:"units,omitempty" jsonschema:"New units of measure"`
 	MinimumStock int    `json:"minimum_stock,omitempty" jsonschema:"New minimum stock level. 0 or omit to leave unchanged."`
 	ImageURL     string `json:"image_url,omitempty" jsonschema:"URL of an image to set for this part. InvenTree downloads it server-side."`
+
+	Link            string `json:"link,omitempty" jsonschema:"New external URL for this part, typically the datasheet"`
+	DefaultLocation int    `json:"default_location,omitempty" jsonschema:"New default stock location ID. 0 or omit to leave unchanged."`
+	Revision        string `json:"revision,omitempty" jsonschema:"New part revision designator"`
+	Purchaseable    *bool  `json:"purchaseable,omitempty" jsonschema:"Whether the part can be purchased"`
+	Component       *bool  `json:"component,omitempty" jsonschema:"Whether the part is a component"`
+	Assembly        *bool  `json:"assembly,omitempty" jsonschema:"Whether the part is an assembly"`
+	Trackable       *bool  `json:"trackable,omitempty" jsonschema:"Whether the part is trackable by serial number"`
+	Virtual         *bool  `json:"virtual,omitempty" jsonschema:"Whether the part is virtual (not physical)"`
+	Salable         *bool  `json:"salable,omitempty" jsonschema:"Whether the part can be sold to customers"`
 }
 
 func RegisterUpdatePart(server *mcp.Server, c *client.Client, r *coerce.Registry) {
@@ -207,6 +240,33 @@ func RegisterUpdatePart(server *mcp.Server, c *client.Client, r *coerce.Registry
 		}
 		if input.ImageURL != "" {
 			payload["remote_image"] = input.ImageURL
+		}
+		if input.Link != "" {
+			payload["link"] = input.Link
+		}
+		if input.DefaultLocation != 0 {
+			payload["default_location"] = input.DefaultLocation
+		}
+		if input.Revision != "" {
+			payload["revision"] = input.Revision
+		}
+		if input.Purchaseable != nil {
+			payload["purchaseable"] = *input.Purchaseable
+		}
+		if input.Component != nil {
+			payload["component"] = *input.Component
+		}
+		if input.Assembly != nil {
+			payload["assembly"] = *input.Assembly
+		}
+		if input.Trackable != nil {
+			payload["trackable"] = *input.Trackable
+		}
+		if input.Virtual != nil {
+			payload["virtual"] = *input.Virtual
+		}
+		if input.Salable != nil {
+			payload["salable"] = *input.Salable
 		}
 
 		if len(payload) == 0 {

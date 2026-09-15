@@ -12,18 +12,18 @@ import (
 
 // PartCategory represents an InvenTree part category.
 type PartCategory struct {
-	PK            int    `json:"pk"`
-	Name          string `json:"name"`
-	Description   string `json:"description"`
-	Parent        *int   `json:"parent"`
-	PathString    string `json:"pathstring"`
-	Level         int    `json:"level"`
-	PartCount     int    `json:"part_count"`
-	Subcategories int    `json:"subcategories"`
-	Starred       bool   `json:"starred"`
-	Structural    bool   `json:"structural"`
-	Icon          string `json:"icon"`
-	DefaultLocation *int `json:"default_location"`
+	PK              int    `json:"pk"`
+	Name            string `json:"name"`
+	Description     string `json:"description"`
+	Parent          *int   `json:"parent"`
+	PathString      string `json:"pathstring"`
+	Level           int    `json:"level"`
+	PartCount       int    `json:"part_count"`
+	Subcategories   int    `json:"subcategories"`
+	Starred         bool   `json:"starred"`
+	Structural      bool   `json:"structural"`
+	Icon            string `json:"icon"`
+	DefaultLocation *int   `json:"default_location"`
 }
 
 // -- Search Part Categories --

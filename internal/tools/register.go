@@ -48,5 +48,23 @@ func RegisterAll(server *mcp.Server, c *client.Client, imgClient *imagesearch.Cl
 	RegisterUpdateCategory(server, c, r)
 	RegisterDeleteCategory(server, c, r)
 
+	// Parameters. The resolver is shared so the parameter API flavour
+	// (generic vs legacy) is probed once per server, not once per tool.
+	paramRes := newParamAPIResolver()
+	RegisterGetPartParameters(server, c, paramRes, r)
+	RegisterSetPartParameters(server, c, paramRes, r)
+	RegisterListParameterTemplates(server, c, paramRes, r)
+
+	// Companies, manufacturer parts and supplier parts
+	RegisterSearchCompanies(server, c, r)
+	RegisterGetOrCreateCompany(server, c, r)
+	RegisterCreateManufacturerPart(server, c, r)
+	RegisterCreateSupplierPart(server, c, r)
+	RegisterSearchSupplierParts(server, c, r)
+	RegisterGetPartSourcing(server, c, r)
+
+	// End-to-end component intake
+	RegisterIntakePart(server, c, paramRes, r)
+
 	return r
 }

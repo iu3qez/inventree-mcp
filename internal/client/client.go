@@ -3,6 +3,7 @@ package client
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -140,26 +141,46 @@ func decodeResponse(resp *http.Response, dest any) error {
 	return nil
 }
 
+// APIError is returned for non-2xx responses from the InvenTree API.
+// Callers can inspect StatusCode via errors.As to branch on specific
+// conditions (e.g. falling back to a legacy endpoint on 404).
+type APIError struct {
+	StatusCode int
+	Message    string
+}
+
+func (e *APIError) Error() string { return e.Message }
+
+// StatusCode extracts the HTTP status code from an error returned by this
+// package, unwrapping as needed. It returns 0 if err is not an APIError.
+func StatusCode(err error) int {
+	var apiErr *APIError
+	if errors.As(err, &apiErr) {
+		return apiErr.StatusCode
+	}
+	return 0
+}
+
 // apiError returns a descriptive error for non-2xx responses.
 func apiError(status int, body []byte) error {
 	msg := strings.TrimSpace(string(body))
 
 	switch status {
 	case http.StatusUnauthorized:
-		return fmt.Errorf("authentication failed (401): check INVENTREE_TOKEN")
+		return &APIError{status, "authentication failed (401): check INVENTREE_TOKEN"}
 	case http.StatusForbidden:
-		return fmt.Errorf("permission denied (403): token lacks access to this resource")
+		return &APIError{status, "permission denied (403): token lacks access to this resource"}
 	case http.StatusNotFound:
-		return fmt.Errorf("not found (404): resource does not exist")
+		return &APIError{status, "not found (404): resource does not exist"}
 	default:
 		if msg == "" {
-			return fmt.Errorf("API error %d (empty response)", status)
+			return &APIError{status, fmt.Sprintf("API error %d (empty response)", status)}
 		}
 		// Truncate long error bodies to keep messages readable.
 		if len(msg) > 500 {
 			msg = msg[:500] + "..."
 		}
-		return fmt.Errorf("API error %d: %s", status, msg)
+		return &APIError{status, fmt.Sprintf("API error %d: %s", status, msg)}
 	}
 }
 
