@@ -260,4 +260,3 @@ func TestCreateAndDeleteCategory(t *testing.T) {
 	}
 	t.Logf("Found test category via search: %s", searchResp.Results[0].PathString)
 }
-

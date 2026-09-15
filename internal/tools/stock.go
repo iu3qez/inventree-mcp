@@ -231,6 +231,51 @@ type DeleteStockItemInput struct {
 	ID int `json:"id" jsonschema:"The stock item ID (pk) to delete"`
 }
 
+// -- Stock History --
+
+// StockTrackingEntry is one entry in a stock item's audit trail.
+type StockTrackingEntry struct {
+	PK           int            `json:"pk"`
+	Item         int            `json:"item"`
+	Part         int            `json:"part"`
+	Date         string         `json:"date"`
+	Deltas       map[string]any `json:"deltas"`
+	Label        string         `json:"label"`
+	Notes        string         `json:"notes"`
+	TrackingType int            `json:"tracking_type"`
+	User         *int           `json:"user"`
+}
+
+type GetStockHistoryInput struct {
+	Item  int `json:"item" jsonschema:"Stock item ID (pk) to get the tracking history for"`
+	Limit int `json:"limit,omitempty" jsonschema:"Maximum number of entries (default 50)"`
+}
+
+func RegisterGetStockHistory(server *mcp.Server, c *client.Client, r *coerce.Registry) {
+	coerce.AddTool(server, r, &mcp.Tool{
+		Name: "get_stock_history",
+		Description: "Get the tracking history of a stock item - every movement, count and status change, with the note attached to each. " +
+			"Use this to answer when and why a stock level changed, or to find where a particular note ended up.",
+		Annotations: &mcp.ToolAnnotations{
+			ReadOnlyHint: true,
+		},
+	}, func(ctx context.Context, req *mcp.CallToolRequest, input GetStockHistoryInput) (*mcp.CallToolResult, any, error) {
+		if input.Item == 0 {
+			return errResult(fmt.Errorf("item is required")), nil, nil
+		}
+		limit := input.Limit
+		if limit <= 0 {
+			limit = 50
+		}
+		path := fmt.Sprintf("/api/stock/track/?item=%d&limit=%d&format=json", input.Item, limit)
+		var resp client.PaginatedResponse[StockTrackingEntry]
+		if err := c.Get(path, &resp); err != nil {
+			return errResult(fmt.Errorf("getting history for stock item %d: %w", input.Item, err)), nil, nil
+		}
+		return jsonResult(map[string]any{"count": resp.Count, "results": resp.Results})
+	})
+}
+
 func RegisterDeleteStockItem(server *mcp.Server, c *client.Client, r *coerce.Registry) {
 	coerce.AddTool(server, r, &mcp.Tool{
 		Name:        "delete_stock_item",

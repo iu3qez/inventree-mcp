@@ -186,21 +186,64 @@ func RegisterUpdateLocation(server *mcp.Server, c *client.Client, r *coerce.Regi
 // -- Delete Stock Location --
 
 type DeleteLocationInput struct {
-	ID int `json:"id" jsonschema:"The location ID (pk) to delete"`
+	ID                 int  `json:"id" jsonschema:"The location ID (pk) to delete"`
+	DeleteStockItems   bool `json:"delete_stock_items,omitempty" jsonschema:"Delete any stock items the location still holds. Default false, which moves them to the parent location instead."`
+	DeleteSubLocations bool `json:"delete_sub_locations,omitempty" jsonschema:"Delete any sub-locations. Default false, which moves them to the parent location instead."`
 }
 
 func RegisterDeleteLocation(server *mcp.Server, c *client.Client, r *coerce.Registry) {
 	coerce.AddTool(server, r, &mcp.Tool{
-		Name:        "delete_stock_location",
-		Description: "Delete a stock location. This is destructive and cannot be undone. The location must be empty (no stock items or sub-locations).",
+		Name: "delete_stock_location",
+		Description: "Delete a stock location. This is destructive and cannot be undone. " +
+			"The location does not have to be empty: by default any stock items and sub-locations it still holds are MOVED to its parent location (or left unassigned if it has no parent), not deleted. " +
+			"Set delete_stock_items or delete_sub_locations to true to delete the contents along with the location. " +
+			"The result reports what happened to the contents.",
 		Annotations: &mcp.ToolAnnotations{
 			DestructiveHint: boolPtr(true),
 		},
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input DeleteLocationInput) (*mcp.CallToolResult, any, error) {
 		path := fmt.Sprintf("/api/stock/location/%d/", input.ID)
-		if err := c.Delete(path); err != nil {
+
+		// Read the location before it is gone, so the result can say what
+		// became of its contents.
+		var existing StockLocation
+		if err := c.Get(path+"?format=json", &existing); err != nil {
+			return errResult(fmt.Errorf("looking up location %d: %w", input.ID, err)), nil, nil
+		}
+
+		// InvenTree puts these on the delete serializer and rejects a
+		// body-less DELETE with "This field is required."
+		err := c.DeleteWithBody(path, map[string]any{
+			"delete_stock_items":   input.DeleteStockItems,
+			"delete_sub_locations": input.DeleteSubLocations,
+		})
+		if err != nil {
 			return errResult(fmt.Errorf("deleting location %d: %w", input.ID, err)), nil, nil
 		}
-		return textResult(fmt.Sprintf("Location %d deleted successfully.", input.ID))
+
+		var deleted, moved []string
+		if existing.Items > 0 {
+			s := countOf(existing.Items, "stock item", "stock items")
+			if input.DeleteStockItems {
+				deleted = append(deleted, s)
+			} else {
+				moved = append(moved, s)
+			}
+		}
+		if existing.Sublocations > 0 {
+			s := countOf(existing.Sublocations, "sub-location", "sub-locations")
+			if input.DeleteSubLocations {
+				deleted = append(deleted, s)
+			} else {
+				moved = append(moved, s)
+			}
+		}
+		destination := "the parent location"
+		if existing.Parent == nil {
+			destination = "no location (now unassigned)"
+		}
+
+		return textResult(fmt.Sprintf("Location %d (%s) deleted successfully.%s",
+			input.ID, existing.Name, deletionSummary(deleted, moved, destination)))
 	})
 }
