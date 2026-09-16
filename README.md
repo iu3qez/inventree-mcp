@@ -254,6 +254,24 @@ stock. Steps are independent: if one fails the others still run and the result s
 what succeeded and what did not. An existing supplier part with the same SKU is
 reused rather than duplicated.
 
+### LCSC lookup
+
+| Tool | Description |
+|---|---|
+| `lcsc_get_product` | Full LCSC listing for a C-number, and whether InvenTree already has it |
+| `lcsc_search` | Search the LCSC catalogue by MPN, code or description |
+
+These feed `intake_part` with data from the distributor instead of from memory:
+MPN, manufacturer, description, package, datasheet, image, stock, price breaks and
+datasheet parameters. They need no API key, only outbound HTTPS, because they use the
+undocumented endpoints behind the LCSC website (via
+[go-lcsc](https://github.com/PatrickWalther/go-lcsc)) — which also means they can
+break without notice. Prices are always reported in USD, LCSC's own quoting currency.
+
+```
+"Look up C8574 on LCSC and take it in, 50 pieces into Blue 2"
+```
+
 ### Notes on InvenTree 1.x
 
 Two behaviours are worth knowing, because both used to fail silently:

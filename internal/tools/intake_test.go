@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/chrisbotelho/inventree-mcp/internal/client"
+	"github.com/chrisbotelho/inventree-mcp/internal/lcsc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -266,10 +267,16 @@ func toFloat(v any) float64 {
 // connect wires an MCP client to a server with all tools registered.
 func connect(t *testing.T, c *client.Client) *mcp.ClientSession {
 	t.Helper()
+	return connectWithLCSC(t, c, nil)
+}
+
+// connectWithLCSC is connect with an LCSC client, for the LCSC tools.
+func connectWithLCSC(t *testing.T, c *client.Client, lc *lcsc.Client) *mcp.ClientSession {
+	t.Helper()
 	ctx := context.Background()
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.0.1"}, nil)
-	registry := RegisterAll(server, c, nil)
+	registry := RegisterAll(server, c, nil, lc)
 	server.AddReceivingMiddleware(registry.Middleware())
 
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
@@ -339,6 +346,7 @@ func TestAllToolsRegistered(t *testing.T) {
 		"create_manufacturer_part", "create_supplier_part",
 		"search_supplier_parts", "get_part_sourcing",
 		"intake_part",
+		"lcsc_get_product", "lcsc_search",
 	} {
 		if !seen[name] {
 			t.Errorf("tool %q is not registered", name)
