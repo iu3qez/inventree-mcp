@@ -180,13 +180,13 @@ type SupplierPriceBreak struct {
 }
 
 type GetSupplierPriceBreaksInput struct {
-	SupplierPart int `json:"supplier_part" jsonschema:"Supplier part ID (pk) - from get_supplier_parts, NOT the part ID"`
+	SupplierPart int `json:"supplier_part" jsonschema:"Supplier part ID (pk) - from search_supplier_parts or get_part_sourcing, NOT the part ID"`
 }
 
 func RegisterGetSupplierPriceBreaks(server *mcp.Server, c *client.Client, r *coerce.Registry) {
 	coerce.AddTool(server, r, &mcp.Tool{
 		Name: "get_supplier_price_breaks",
-		Description: "List the quantity/price tiers of one supplier part. Takes a supplier part pk (from get_supplier_parts), not a part pk - " +
+		Description: "List the quantity/price tiers of one supplier part. Takes a supplier part pk (from search_supplier_parts or get_part_sourcing), not a part pk - " +
 			"InvenTree calls this field 'part' in its own API, which is a well-worn trap.",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input GetSupplierPriceBreaksInput) (*mcp.CallToolResult, any, error) {
@@ -213,7 +213,7 @@ func listPriceBreaks(c *client.Client, supplierPartID int) ([]SupplierPriceBreak
 // -- Set Supplier Price Break (upsert) --
 
 type SetSupplierPriceBreakInput struct {
-	SupplierPart  int     `json:"supplier_part" jsonschema:"Supplier part ID (pk) - from get_supplier_parts, NOT the part ID"`
+	SupplierPart  int     `json:"supplier_part" jsonschema:"Supplier part ID (pk) - from search_supplier_parts or get_part_sourcing, NOT the part ID"`
 	Quantity      float64 `json:"quantity" jsonschema:"Quantity threshold this price applies from (e.g. 1, 10, 100)"`
 	Price         float64 `json:"price" jsonschema:"Unit price at this quantity"`
 	PriceCurrency string  `json:"price_currency,omitempty" jsonschema:"ISO currency code, e.g. 'EUR'. Defaults to the instance's currency."`
