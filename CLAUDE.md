@@ -41,7 +41,8 @@ internal/
   tools/                     - MCP tool implementations (one file per InvenTree resource domain).
                                parts, stock, locations, categories, parameters (specs),
                                companies (manufacturer/supplier parts), intake (end-to-end
-                               component registration).
+                               component registration), lcsc (catalogue lookup).
+  lcsc/                      - LCSC catalogue client over go-lcsc, returning this server's own compact types.
   config/                    - Configuration loading (base URL, API token).
 ```
 
@@ -96,6 +97,19 @@ Handler signature uses typed input/output structs with `json`/`jsonschema` tags.
 
 The server expects `INVENTREE_URL` and `INVENTREE_TOKEN` environment variables (or equivalent config) to connect to an InvenTree instance.
 
+### LCSC lookup
+
+`lcsc_get_product` and `lcsc_search` need no configuration, only outbound HTTPS to
+`wmsc.lcsc.com`. They go through `github.com/PatrickWalther/go-lcsc`, which calls LCSC's
+undocumented website endpoints: expect them to break without notice.
+
+- **LCSC prices are always USD. Never pass `WithCurrency` to go-lcsc.** The only price field
+  go-lcsc reads (`productPrice`) is quoted in USD whatever currency is requested; the currency
+  cookie just makes LCSC relabel it with another symbol, while the converted amount sits in a
+  `currencyPrice` field go-lcsc does not map. InvenTree converts with its own exchange rates.
+  `TestPricesStayInUSD` guards this.
+- An unknown code comes back as HTTP 200 with a null result, which go-lcsc turns into `ErrNotFound`.
+
 ### Optional: Image Search
 
 To enable the `search_part_images` tool, set these additional environment variables:
@@ -112,6 +126,12 @@ If not set, the server starts normally but `search_part_images` returns an infor
   calls — it is idempotent on the SKU and reports per-step failures instead of leaving a
   half-populated part behind. Always call `search_supplier_parts` first: a known SKU means the
   part already exists.
+
+- **Intake from an LCSC code:** start with `lcsc_get_product`. It returns the authoritative MPN,
+  manufacturer, description, datasheet and image, and already reports whether InvenTree has a
+  supplier part with that SKU. Map its parameters onto existing templates
+  (`list_parameter_templates`) rather than passing LCSC's verbose names through, which would add a
+  template per LCSC label.
 
 - **Part descriptions from part numbers:** When the user provides just a part number (e.g., "LM7805", "ESP32-S3-WROOM-1"), look up or infer what the part is and generate a short, descriptive description for it. Never leave the description blank or just repeat the part number.
 

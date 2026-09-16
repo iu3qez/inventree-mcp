@@ -20,7 +20,7 @@ func setupServer(t *testing.T) (*mcp.Server, *client.Client) {
 
 	c := client.New(url, token)
 	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.0.1"}, nil)
-	registry := tools.RegisterAll(server, c, nil)
+	registry := tools.RegisterAll(server, c, nil, nil)
 	server.AddReceivingMiddleware(registry.Middleware())
 	return server, c
 }

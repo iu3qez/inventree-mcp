@@ -4,14 +4,16 @@ import (
 	"github.com/chrisbotelho/inventree-mcp/internal/client"
 	"github.com/chrisbotelho/inventree-mcp/internal/coerce"
 	"github.com/chrisbotelho/inventree-mcp/internal/imagesearch"
+	"github.com/chrisbotelho/inventree-mcp/internal/lcsc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // RegisterAll registers all InvenTree MCP tools with the server and returns
 // a coerce.Registry populated with the schema types for each tool. Use the
 // registry to install coercion middleware via registry.Middleware().
-// imgClient may be nil if image search is not configured.
-func RegisterAll(server *mcp.Server, c *client.Client, imgClient *imagesearch.Client) *coerce.Registry {
+// imgClient may be nil if image search is not configured, and lcscClient may
+// be nil where LCSC must not be reached (tests).
+func RegisterAll(server *mcp.Server, c *client.Client, imgClient *imagesearch.Client, lcscClient *lcsc.Client) *coerce.Registry {
 	r := coerce.NewRegistry()
 
 	// Parts
@@ -73,6 +75,10 @@ func RegisterAll(server *mcp.Server, c *client.Client, imgClient *imagesearch.Cl
 
 	// End-to-end component intake
 	RegisterIntakePart(server, c, paramRes, r)
+
+	// LCSC catalogue lookup, the data source for intake from an LCSC code
+	RegisterLCSCGetProduct(server, c, lcscClient, r)
+	RegisterLCSCSearch(server, lcscClient, r)
 
 	return r
 }
