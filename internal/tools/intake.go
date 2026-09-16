@@ -23,7 +23,7 @@ type IntakePartInput struct {
 	Keywords    string `json:"keywords,omitempty" jsonschema:"Keywords for search"`
 	Units       string `json:"units,omitempty" jsonschema:"Units of measure"`
 	Link        string `json:"link,omitempty" jsonschema:"Datasheet URL for the part"`
-	ImageURL    string `json:"image_url,omitempty" jsonschema:"Product image URL. InvenTree downloads it server-side."`
+	ImageURL    string `json:"image_url,omitempty" jsonschema:"Product image URL. Downloaded by this MCP server and uploaded to InvenTree as file bytes."`
 
 	MinimumStock    int `json:"minimum_stock,omitempty" jsonschema:"Minimum stock level"`
 	DefaultLocation int `json:"default_location,omitempty" jsonschema:"Default stock location ID for this part"`
@@ -43,6 +43,12 @@ type IntakePartInput struct {
 	InitialStock     float64 `json:"initial_stock,omitempty" jsonschema:"Quantity of stock to create for this part. 0 or omit to skip."`
 	StockLocation    int     `json:"stock_location,omitempty" jsonschema:"Location ID for the initial stock. Falls back to default_location."`
 	ReuseExistingSKU *bool   `json:"reuse_existing_sku,omitempty" jsonschema:"When a supplier part with the same SKU already exists, enrich that part instead of creating a duplicate (default true)"`
+}
+
+// hasSourcing reports whether the intake will attach a manufacturer or
+// supplier part, which InvenTree only allows on a purchaseable part.
+func (in IntakePartInput) hasSourcing() bool {
+	return (in.Manufacturer != "" && in.MPN != "") || (in.Supplier != "" && in.SKU != "")
 }
 
 func RegisterIntakePart(server *mcp.Server, c *client.Client, res *paramAPIResolver, r *coerce.Registry) {
@@ -101,6 +107,16 @@ func RegisterIntakePart(server *mcp.Server, c *client.Client, res *paramAPIResol
 			report["part_status"] = "existing"
 		}
 		report["part_id"] = partID
+
+		// A part created above is already purchaseable; an existing one may not
+		// be, and steps 3 and 4 fail on it with a misleading "does not exist".
+		if input.hasSourcing() && report["part_status"] != "created" {
+			if changed, err := ensurePartPurchaseable(c, partID); err != nil {
+				problems = append(problems, fmt.Sprintf("purchaseable flag: %v", err))
+			} else if changed {
+				report["part_marked_purchaseable"] = true
+			}
+		}
 
 		// 2. Parameters.
 		if len(input.Parameters) > 0 {
@@ -185,6 +201,11 @@ func createIntakePart(c *client.Client, input IntakePartInput) (*Part, error) {
 	}
 	if input.DefaultLocation != 0 {
 		payload["default_location"] = input.DefaultLocation
+	}
+	// Otherwise the flag comes from the PART_PURCHASEABLE setting, and with it
+	// off the manufacturer and supplier parts could not be attached.
+	if input.hasSourcing() {
+		payload["purchaseable"] = true
 	}
 
 	var created Part

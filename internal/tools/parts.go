@@ -107,7 +107,7 @@ type CreatePartInput struct {
 	Keywords     string   `json:"keywords,omitempty" jsonschema:"Keywords for search"`
 	Units        string   `json:"units,omitempty" jsonschema:"Units of measure"`
 	MinimumStock int      `json:"minimum_stock,omitempty" jsonschema:"Minimum stock level"`
-	Purchaseable *bool    `json:"purchaseable,omitempty" jsonschema:"Whether the part can be purchased (default true)"`
+	Purchaseable *bool    `json:"purchaseable,omitempty" jsonschema:"Whether the part can be purchased. Omit to use the instance default (the PART_PURCHASEABLE setting)."`
 	Component    *bool    `json:"component,omitempty" jsonschema:"Whether the part is a component (default true)"`
 	Assembly     *bool    `json:"assembly,omitempty" jsonschema:"Whether the part is an assembly"`
 	Trackable    *bool    `json:"trackable,omitempty" jsonschema:"Whether the part is trackable by serial number"`

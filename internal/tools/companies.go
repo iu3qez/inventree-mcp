@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strings"
 
@@ -255,8 +256,9 @@ type CreateManufacturerPartInput struct {
 
 func RegisterCreateManufacturerPart(server *mcp.Server, c *client.Client, r *coerce.Registry) {
 	coerce.AddTool(server, r, &mcp.Tool{
-		Name:        "create_manufacturer_part",
-		Description: "Record the manufacturer and MPN for a part. This is what lets you go from a manufacturer part number back to the InvenTree part. Create the manufacturer company first with get_or_create_company (is_manufacturer=true).",
+		Name: "create_manufacturer_part",
+		Description: "Record the manufacturer and MPN for a part. This is what lets you go from a manufacturer part number back to the InvenTree part. Create the manufacturer company first with get_or_create_company (is_manufacturer=true). " +
+			"The part is marked purchaseable if it is not already, because InvenTree only accepts manufacturer parts for purchaseable parts.",
 		Annotations: &mcp.ToolAnnotations{
 			DestructiveHint: boolPtr(false),
 		},
@@ -266,6 +268,9 @@ func RegisterCreateManufacturerPart(server *mcp.Server, c *client.Client, r *coe
 		}
 		if strings.TrimSpace(input.MPN) == "" {
 			return errResult(fmt.Errorf("MPN is required")), nil, nil
+		}
+		if _, err := ensurePartPurchaseable(c, input.Part); err != nil {
+			return errResult(err), nil, nil
 		}
 
 		payload := map[string]any{
@@ -306,7 +311,8 @@ func RegisterCreateSupplierPart(server *mcp.Server, c *client.Client, r *coerce.
 	coerce.AddTool(server, r, &mcp.Tool{
 		Name: "create_supplier_part",
 		Description: "Record a distributor SKU for a part (e.g. an LCSC, Mouser or Digi-Key order code), optionally linked to a manufacturer part. " +
-			"Without this there is no way to go from a distributor code back to the InvenTree part. Create the supplier company first with get_or_create_company (is_supplier=true).",
+			"Without this there is no way to go from a distributor code back to the InvenTree part. Create the supplier company first with get_or_create_company (is_supplier=true). " +
+			"The part is marked purchaseable if it is not already, because InvenTree only accepts supplier parts for purchaseable parts.",
 		Annotations: &mcp.ToolAnnotations{
 			DestructiveHint: boolPtr(false),
 		},
@@ -316,6 +322,9 @@ func RegisterCreateSupplierPart(server *mcp.Server, c *client.Client, r *coerce.
 		}
 		if strings.TrimSpace(input.SKU) == "" {
 			return errResult(fmt.Errorf("SKU is required")), nil, nil
+		}
+		if _, err := ensurePartPurchaseable(c, input.Part); err != nil {
+			return errResult(err), nil, nil
 		}
 
 		payload := map[string]any{
@@ -384,6 +393,13 @@ func RegisterSearchSupplierParts(server *mcp.Server, c *client.Client, r *coerce
 
 		var resp client.PaginatedResponse[SupplierPart]
 		if err := c.Get(path, &resp); err != nil {
+			if input.Part != 0 && isUnpurchaseablePart(c, input.Part, err) {
+				return jsonResult(map[string]any{
+					"count":   0,
+					"results": []SupplierPart{},
+					"note":    unpurchaseableNote,
+				})
+			}
 			return errResult(fmt.Errorf("searching supplier parts: %w", err)), nil, nil
 		}
 		return jsonResult(map[string]any{
@@ -414,6 +430,14 @@ func RegisterGetPartSourcing(server *mcp.Server, c *client.Client, r *coerce.Reg
 		var mfg client.PaginatedResponse[ManufacturerPart]
 		mfgPath := fmt.Sprintf("/api/company/part/manufacturer/?part=%d&limit=100&format=json", input.Part)
 		if err := c.Get(mfgPath, &mfg); err != nil {
+			if isUnpurchaseablePart(c, input.Part, err) {
+				return jsonResult(map[string]any{
+					"part":               input.Part,
+					"manufacturer_parts": []ManufacturerPart{},
+					"supplier_parts":     []SupplierPart{},
+					"note":               unpurchaseableNote,
+				})
+			}
 			return errResult(fmt.Errorf("listing manufacturer parts for part %d: %w", input.Part, err)), nil, nil
 		}
 
@@ -430,6 +454,47 @@ func RegisterGetPartSourcing(server *mcp.Server, c *client.Client, r *coerce.Reg
 		})
 	})
 }
+
+// InvenTree limits both ManufacturerPart.part and SupplierPart.part with
+// limit_choices_to={'purchaseable': True}. The restriction lives on the Django
+// model, so it reaches the API in two places and neither mentions the flag:
+// creating a manufacturer or supplier part fails with `Invalid pk "N" - object
+// does not exist`, and the auto-generated `part` list filter answers 400
+// "Select a valid choice". New parts take the flag from the PART_PURCHASEABLE
+// setting, which an instance can turn off.
+
+// ensurePartPurchaseable sets the purchaseable flag on a part that is about to
+// receive sourcing data, reporting whether it had to be changed.
+func ensurePartPurchaseable(c *client.Client, partID int) (bool, error) {
+	path := fmt.Sprintf("/api/part/%d/", partID)
+	var part Part
+	if err := c.Get(path+"?format=json", &part); err != nil {
+		return false, fmt.Errorf("reading part %d: %w", partID, err)
+	}
+	if part.Purchaseable {
+		return false, nil
+	}
+	if err := c.Patch(path, map[string]any{"purchaseable": true}, nil); err != nil {
+		return false, fmt.Errorf("marking part %d purchaseable: %w", partID, err)
+	}
+	return true, nil
+}
+
+// isUnpurchaseablePart reports whether err is the 400 a `part` filter returns
+// because the part is not purchaseable, as opposed to any other bad request.
+func isUnpurchaseablePart(c *client.Client, partID int, err error) bool {
+	if client.StatusCode(err) != http.StatusBadRequest {
+		return false
+	}
+	var part Part
+	if getErr := c.Get(fmt.Sprintf("/api/part/%d/?format=json", partID), &part); getErr != nil {
+		return false
+	}
+	return !part.Purchaseable
+}
+
+const unpurchaseableNote = "This part is not purchaseable, and InvenTree neither lists nor accepts manufacturer or " +
+	"supplier parts for a part without that flag. Set purchaseable=true with update_part to record sourcing for it."
 
 // defaultCurrency reads the instance-wide default currency, which InvenTree
 // requires on every company but does not fill in itself on the API.

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -31,6 +32,7 @@ type fakeInvenTree struct {
 	templates  map[string]int            // template name -> pk
 	parameters map[int]string            // template pk -> value
 	companies  map[string]map[string]any // lowercased name -> company record
+	parts      map[int]map[string]any    // pk -> part record
 
 	nextPK int
 }
@@ -46,6 +48,7 @@ func newFakeInvenTree() *fakeInvenTree {
 		templates:  map[string]int{},
 		parameters: map[int]string{},
 		companies:  map[string]map[string]any{},
+		parts:      map[int]map[string]any{},
 		nextPK:     100,
 	}
 }
@@ -53,6 +56,24 @@ func newFakeInvenTree() *fakeInvenTree {
 func (f *fakeInvenTree) pk() int {
 	f.nextPK++
 	return f.nextPK
+}
+
+// purchaseable mirrors limit_choices_to={'purchaseable': True} on the part
+// foreign key of manufacturer and supplier parts. Parts are created with the
+// flag off unless asked for, as on an instance with PART_PURCHASEABLE disabled.
+func (f *fakeInvenTree) purchaseable(pk int) bool {
+	part, ok := f.parts[pk]
+	return ok && part["purchaseable"] == true
+}
+
+// partDetailPK extracts N from /api/part/N/, reporting false for any other path.
+func partDetailPK(path string) (int, bool) {
+	rest, ok := strings.CutPrefix(path, "/api/part/")
+	if !ok {
+		return 0, false
+	}
+	pk, err := strconv.Atoi(strings.TrimSuffix(rest, "/"))
+	return pk, err == nil
 }
 
 func (f *fakeInvenTree) record(r *http.Request) {
@@ -206,13 +227,35 @@ func (f *fakeInvenTree) handle(w http.ResponseWriter, r *http.Request) {
 
 	// -- parts --
 	case path == "/api/part/" && r.Method == http.MethodPost:
-		writeJSON(w, http.StatusCreated, map[string]any{
+		record := map[string]any{
 			"pk": 42, "name": body["name"], "description": body["description"],
 			"link": body["link"], "default_location": body["default_location"],
-		})
+			"purchaseable": body["purchaseable"] == true,
+		}
+		f.parts[42] = record
+		writeJSON(w, http.StatusCreated, record)
+
+	case strings.HasPrefix(path, "/api/part/") && (r.Method == http.MethodGet || r.Method == http.MethodPatch):
+		pk, ok := partDetailPK(path)
+		if !ok {
+			http.Error(w, "unhandled: "+path, http.StatusNotFound)
+			return
+		}
+		record, ok := f.parts[pk]
+		if !ok {
+			http.Error(w, "no such part", http.StatusNotFound)
+			return
+		}
+		for k, v := range body {
+			record[k] = v
+		}
+		writeJSON(w, http.StatusOK, record)
 
 	// -- manufacturer parts --
 	case path == "/api/company/part/manufacturer/":
+		if rejected := f.rejectUnpurchaseable(w, r, body); rejected {
+			return
+		}
 		if r.Method == http.MethodPost {
 			writeJSON(w, http.StatusCreated, map[string]any{
 				"pk": f.pk(), "part": body["part"],
@@ -224,6 +267,9 @@ func (f *fakeInvenTree) handle(w http.ResponseWriter, r *http.Request) {
 
 	// -- supplier parts --
 	case path == "/api/company/part/":
+		if rejected := f.rejectUnpurchaseable(w, r, body); rejected {
+			return
+		}
 		if r.Method == http.MethodPost {
 			writeJSON(w, http.StatusCreated, map[string]any{
 				"pk": f.pk(), "part": body["part"],
@@ -243,6 +289,30 @@ func (f *fakeInvenTree) handle(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "unhandled: "+path, http.StatusNotFound)
 	}
+}
+
+// rejectUnpurchaseable answers the way InvenTree does when a manufacturer or
+// supplier part endpoint is handed a part outside its limited queryset.
+func (f *fakeInvenTree) rejectUnpurchaseable(w http.ResponseWriter, r *http.Request, body map[string]any) bool {
+	if r.Method == http.MethodPost {
+		pk := int(toFloat(body["part"]))
+		if !f.purchaseable(pk) {
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"part": []string{fmt.Sprintf("Invalid pk \"%d\" - object does not exist.", pk)},
+			})
+			return true
+		}
+		return false
+	}
+	if raw := r.URL.Query().Get("part"); raw != "" {
+		if pk, _ := strconv.Atoi(raw); !f.purchaseable(pk) {
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"part": []string{"Select a valid choice. That choice is not one of the available choices."},
+			})
+			return true
+		}
+	}
+	return false
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -484,6 +554,10 @@ func TestIntakePartEndToEnd(t *testing.T) {
 		}
 	}
 
+	if !fake.purchaseable(42) {
+		t.Error("a part created with sourcing data must be created purchaseable")
+	}
+
 	// Both companies are created once, with the right roles.
 	if n := fake.countCalls("POST /api/company/"); n != 2 {
 		t.Errorf("created %d companies, want 2", n)
@@ -514,6 +588,83 @@ func TestIntakePartPartialFailure(t *testing.T) {
 	}
 	if fake.countCalls("POST /api/company/part/") != 1 {
 		t.Error("supplier part should still have been created")
+	}
+}
+
+// TestIntakePartMarksExistingPartPurchaseable enriches a part that is not
+// purchaseable. Without setting the flag first, InvenTree rejects both the
+// manufacturer and the supplier part with "object does not exist".
+func TestIntakePartMarksExistingPartPurchaseable(t *testing.T) {
+	fake := newFakeInvenTree()
+	fake.parts[77] = map[string]any{"pk": 77.0, "name": "BC847", "purchaseable": false}
+	session := connect(t, fake.start(t))
+
+	out := callTool(t, session, "intake_part", map[string]any{
+		"part":         77,
+		"manufacturer": "Nexperia",
+		"MPN":          "BC847,215",
+		"supplier":     "LCSC",
+		"SKU":          "C8574",
+	})
+
+	if problems, ok := out["problems"]; ok {
+		t.Fatalf("intake reported problems: %v", problems)
+	}
+	if out["part_marked_purchaseable"] != true {
+		t.Errorf("part_marked_purchaseable = %v, want true", out["part_marked_purchaseable"])
+	}
+	if n := fake.countCalls("PATCH /api/part/77/"); n != 1 {
+		t.Errorf("patched part %d times, want 1", n)
+	}
+}
+
+// TestCreateSourcingSetsPurchaseable checks the standalone sourcing tools set
+// the flag when it is missing and leave an already purchaseable part alone.
+func TestCreateSourcingSetsPurchaseable(t *testing.T) {
+	for _, tool := range []struct {
+		name string
+		args map[string]any
+	}{
+		{"create_manufacturer_part", map[string]any{"part": 77, "manufacturer": 3, "MPN": "BC847,215"}},
+		{"create_supplier_part", map[string]any{"part": 77, "supplier": 5, "SKU": "C8574"}},
+	} {
+		for _, already := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/purchaseable=%v", tool.name, already), func(t *testing.T) {
+				fake := newFakeInvenTree()
+				fake.parts[77] = map[string]any{"pk": 77.0, "purchaseable": already}
+				session := connect(t, fake.start(t))
+
+				callTool(t, session, tool.name, tool.args)
+
+				if !fake.purchaseable(77) {
+					t.Error("part is still not purchaseable")
+				}
+				want := 1
+				if already {
+					want = 0
+				}
+				if n := fake.countCalls("PATCH /api/part/77/"); n != want {
+					t.Errorf("patched part %d times, want %d", n, want)
+				}
+			})
+		}
+	}
+}
+
+// TestGetPartSourcingUnpurchaseablePart checks the 400 InvenTree returns for a
+// part that is not purchaseable becomes an explained empty result.
+func TestGetPartSourcingUnpurchaseablePart(t *testing.T) {
+	fake := newFakeInvenTree()
+	fake.parts[77] = map[string]any{"pk": 77.0, "purchaseable": false}
+	session := connect(t, fake.start(t))
+
+	out := callTool(t, session, "get_part_sourcing", map[string]any{"part": 77})
+
+	if note, _ := out["note"].(string); !strings.Contains(note, "purchaseable") {
+		t.Errorf("note = %q, want an explanation mentioning purchaseable", note)
+	}
+	if parts, _ := out["supplier_parts"].([]any); len(parts) != 0 {
+		t.Errorf("supplier_parts = %v, want empty", parts)
 	}
 }
 
