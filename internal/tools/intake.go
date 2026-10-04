@@ -20,6 +20,7 @@ type IntakePartInput struct {
 	Description string `json:"description,omitempty" jsonschema:"Short descriptive summary of what the part is. Never leave blank or a copy of the part number."`
 	Category    int    `json:"category,omitempty" jsonschema:"Category ID. Use list_part_categories to pick the deepest category that fits."`
 	IPN         string `json:"IPN,omitempty" jsonschema:"Internal Part Number"`
+	IPNTemplate string `json:"ipn_template,omitempty" jsonschema:"IPN derived from the new part's ID, set right after creation. {pk} is replaced by the ID; {pk:05d} pads it with zeros to 5 digits (e.g. 'MEC-{pk:05d}' -> 'MEC-00804'). Mutually exclusive with IPN. Only applies when a new part is created."`
 	Keywords    string `json:"keywords,omitempty" jsonschema:"Keywords for search"`
 	Units       string `json:"units,omitempty" jsonschema:"Units of measure"`
 	Link        string `json:"link,omitempty" jsonschema:"Datasheet URL for the part"`
@@ -39,6 +40,7 @@ type IntakePartInput struct {
 	SupplierLink string `json:"supplier_link,omitempty" jsonschema:"URL of the supplier product page"`
 	Packaging    string `json:"packaging,omitempty" jsonschema:"Packaging the part ships in (e.g. 'Reel', 'Tape')"`
 	PackQuantity string `json:"pack_quantity,omitempty" jsonschema:"Quantity per pack, optionally with units"`
+	SupplierNote string `json:"supplier_note,omitempty" jsonschema:"Note stored on the supplier part, e.g. the minimum order quantity ('MOQ 5'). Only set when the supplier part is created."`
 
 	InitialStock     float64 `json:"initial_stock,omitempty" jsonschema:"Quantity of stock to create for this part. 0 or omit to skip."`
 	StockLocation    int     `json:"stock_location,omitempty" jsonschema:"Location ID for the initial stock. Falls back to default_location."`
@@ -84,6 +86,9 @@ func RegisterIntakePart(server *mcp.Server, c *client.Client, res *paramAPIResol
 			if strings.TrimSpace(input.Name) == "" {
 				return errResult(fmt.Errorf("either part (existing ID) or name (to create a new part) is required")), nil, nil
 			}
+			if err := checkIPNInput(input.IPN, input.IPNTemplate); err != nil {
+				return errResult(err), nil, nil
+			}
 			created, err := createIntakePart(c, input)
 			if err != nil {
 				// Without a part nothing else can be attached: fail outright.
@@ -92,6 +97,16 @@ func RegisterIntakePart(server *mcp.Server, c *client.Client, res *paramAPIResol
 			partID = created.PK
 			report["part_status"] = "created"
 			report["part"] = created
+
+			// The IPN may embed the pk, which only exists once the part does.
+			if input.IPNTemplate != "" {
+				withIPN, err := applyIPNTemplate(c, partID, input.IPNTemplate)
+				if err != nil {
+					problems = append(problems, fmt.Sprintf("IPN: %v", err))
+				} else {
+					report["part"] = withIPN
+				}
+			}
 
 			// The image has to go up as file bytes in a second call: the
 			// remote_image field was removed from the Part API in v489.
@@ -105,6 +120,9 @@ func RegisterIntakePart(server *mcp.Server, c *client.Client, res *paramAPIResol
 			}
 		} else if _, ok := report["part_status"]; !ok {
 			report["part_status"] = "existing"
+		}
+		if input.IPNTemplate != "" && report["part_status"] != "created" {
+			problems = append(problems, "ipn_template ignored: it only applies to a newly created part")
 		}
 		report["part_id"] = partID
 
@@ -335,6 +353,9 @@ func ensureSupplierPart(c *client.Client, partID, manufacturerPartID int, input 
 	}
 	if input.Description != "" {
 		payload["description"] = input.Description
+	}
+	if input.SupplierNote != "" {
+		payload["note"] = input.SupplierNote
 	}
 
 	var created SupplierPart
