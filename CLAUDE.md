@@ -126,6 +126,8 @@ If not set, the server starts normally but `search_part_images` returns an infor
   calls — it is idempotent on the SKU and reports per-step failures instead of leaving a
   half-populated part behind. Always call `search_supplier_parts` first: a known SKU means the
   part already exists.
+  Pass `ipn_template` (e.g. `"MEC-{pk:05d}"`) rather than a follow-up `update_part` when the IPN
+  embeds the part ID, and `supplier_note` for the distributor MOQ (`"MOQ 5"`).
 
 - **Intake from an LCSC code:** start with `lcsc_get_product`. It returns the authoritative MPN,
   manufacturer, description, datasheet and image, and already reports whether InvenTree has a

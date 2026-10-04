@@ -104,6 +104,7 @@ type CreatePartInput struct {
 	Description  string   `json:"description,omitempty" jsonschema:"Part description"`
 	Category     int      `json:"category,omitempty" jsonschema:"Category ID for the part. 0 or omit for uncategorized."`
 	IPN          string   `json:"IPN,omitempty" jsonschema:"Internal Part Number"`
+	IPNTemplate  string   `json:"ipn_template,omitempty" jsonschema:"IPN derived from the new part's ID, set right after creation. {pk} is replaced by the ID; {pk:05d} pads it with zeros to 5 digits (e.g. 'MEC-{pk:05d}' -> 'MEC-00804'). Mutually exclusive with IPN."`
 	Keywords     string   `json:"keywords,omitempty" jsonschema:"Keywords for search"`
 	Units        string   `json:"units,omitempty" jsonschema:"Units of measure"`
 	MinimumStock int      `json:"minimum_stock,omitempty" jsonschema:"Minimum stock level"`
@@ -129,6 +130,9 @@ func RegisterCreatePart(server *mcp.Server, c *client.Client, r *coerce.Registry
 			DestructiveHint: boolPtr(false),
 		},
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input CreatePartInput) (*mcp.CallToolResult, any, error) {
+		if err := checkIPNInput(input.IPN, input.IPNTemplate); err != nil {
+			return errResult(err), nil, nil
+		}
 		payload := map[string]any{
 			"name": input.Name,
 		}
@@ -185,14 +189,28 @@ func RegisterCreatePart(server *mcp.Server, c *client.Client, r *coerce.Registry
 		if err := c.Post("/api/part/", payload, &created); err != nil {
 			return errResult(fmt.Errorf("creating part: %w", err)), nil, nil
 		}
+		// The part itself exists from here on, so a failed follow-up step is
+		// not a failed call - but it must not pass silently either.
+		followUpErrors := map[string]any{}
+		if input.IPNTemplate != "" {
+			withIPN, err := applyIPNTemplate(c, created.PK, input.IPNTemplate)
+			if err != nil {
+				followUpErrors["ipn_error"] = err.Error()
+			} else {
+				created = withIPN
+			}
+		}
 		if input.ImageURL != "" {
 			withImage, err := attachPartImage(ctx, c, created.PK, input.ImageURL)
 			if err != nil {
-				// The part itself exists, so this is not a failed call - but
-				// it must not pass silently either.
-				return jsonResult(map[string]any{"part": created, "image_error": err.Error()})
+				followUpErrors["image_error"] = err.Error()
+			} else {
+				created = withImage
 			}
-			created = withImage
+		}
+		if len(followUpErrors) > 0 {
+			followUpErrors["part"] = created
+			return jsonResult(followUpErrors)
 		}
 		return jsonResult(created)
 	})

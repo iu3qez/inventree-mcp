@@ -275,7 +275,7 @@ func (f *fakeInvenTree) handle(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusCreated, map[string]any{
 				"pk": f.pk(), "part": body["part"],
 				"supplier": body["supplier"], "SKU": body["SKU"],
-				"manufacturer_part": body["manufacturer_part"],
+				"manufacturer_part": body["manufacturer_part"], "note": body["note"],
 			})
 			return
 		}
@@ -569,6 +569,95 @@ func TestIntakePartEndToEnd(t *testing.T) {
 	// Both companies are created once, with the right roles.
 	if n := fake.countCalls("POST /api/company/"); n != 2 {
 		t.Errorf("created %d companies, want 2", n)
+	}
+}
+
+// TestIntakePartIPNTemplateAndSupplierNote derives the IPN from the pk of
+// the new part and stores the supplier note (the MOQ) on the supplier part.
+func TestIntakePartIPNTemplateAndSupplierNote(t *testing.T) {
+	fake := newFakeInvenTree()
+	session := connect(t, fake.start(t))
+
+	out := callTool(t, session, "intake_part", map[string]any{
+		"name":          "TSA061B2808B",
+		"description":   "Tactile switch, 6x6 mm, SMD",
+		"ipn_template":  "MEC-{pk:05d}",
+		"supplier":      "LCSC",
+		"SKU":           "C20624994",
+		"supplier_note": "MOQ 5",
+	})
+
+	if problems, ok := out["problems"]; ok {
+		t.Fatalf("intake reported problems: %v", problems)
+	}
+	if got := fake.parts[42]["IPN"]; got != "MEC-00042" {
+		t.Errorf("stored IPN = %v, want MEC-00042", got)
+	}
+	part, _ := out["part"].(map[string]any)
+	if got := part["IPN"]; got != "MEC-00042" {
+		t.Errorf("reported IPN = %v, want MEC-00042", got)
+	}
+	sp, _ := out["supplier_part"].(map[string]any)
+	if got := sp["note"]; got != "MOQ 5" {
+		t.Errorf("supplier part note = %v, want MOQ 5", got)
+	}
+}
+
+// TestIPNTemplateRejectedBeforeCreate checks a conflicting or malformed
+// template fails the call without creating a part.
+func TestIPNTemplateRejectedBeforeCreate(t *testing.T) {
+	for _, tc := range []struct {
+		tool string
+		args map[string]any
+	}{
+		{"intake_part", map[string]any{"name": "X", "IPN": "MEC-1", "ipn_template": "MEC-{pk:05d}"}},
+		{"intake_part", map[string]any{"name": "X", "ipn_template": "MEC-"}},
+		{"create_part", map[string]any{"name": "X", "ipn_template": "MEC-{id}"}},
+	} {
+		fake := newFakeInvenTree()
+		session := connect(t, fake.start(t))
+		res, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: tc.tool, Arguments: tc.args})
+		if err != nil {
+			t.Fatalf("%s %v: %v", tc.tool, tc.args, err)
+		}
+		if !res.IsError {
+			t.Errorf("%s %v: expected an error", tc.tool, tc.args)
+		}
+		if n := fake.countCalls("POST /api/part/"); n != 0 {
+			t.Errorf("%s %v: created %d parts, want 0", tc.tool, tc.args, n)
+		}
+	}
+}
+
+// TestCreatePartIPNTemplate checks create_part sets the derived IPN too.
+func TestCreatePartIPNTemplate(t *testing.T) {
+	fake := newFakeInvenTree()
+	session := connect(t, fake.start(t))
+
+	out := callTool(t, session, "create_part", map[string]any{
+		"name": "M3x8", "ipn_template": "MEC-{pk:05d}",
+	})
+	if got := out["IPN"]; got != "MEC-00042" {
+		t.Errorf("IPN = %v, want MEC-00042 (result: %v)", got, out)
+	}
+}
+
+func TestFormatIPN(t *testing.T) {
+	for _, tc := range []struct {
+		template, want string
+		wantErr        bool
+	}{
+		{"MEC-{pk:05d}", "MEC-00804", false},
+		{"R{pk}", "R804", false},
+		{"{pk:6d}", "   804", false},
+		{"{pk:02d}", "804", false},
+		{"MEC-", "", true},
+		{"MEC-{pk:05x}", "", true},
+	} {
+		got, err := formatIPN(tc.template, 804)
+		if (err != nil) != tc.wantErr || got != tc.want {
+			t.Errorf("formatIPN(%q) = %q, %v; want %q, err=%v", tc.template, got, err, tc.want, tc.wantErr)
+		}
 	}
 }
 
