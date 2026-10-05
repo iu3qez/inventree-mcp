@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -235,6 +236,30 @@ func (f *fakeInvenTree) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		f.parts[42] = record
 		writeJSON(w, http.StatusCreated, record)
+
+	// On the list view InvenTree's filterset reads ?tags= as a tag name to
+	// filter on, shadowing the boolean that adds tags to the output: any value,
+	// "true" included, matches only parts carrying that tag.
+	case path == "/api/part/" && r.Method == http.MethodGet:
+		results := []map[string]any{}
+		search := strings.ToLower(q.Get("search"))
+		for _, record := range f.parts {
+			name, _ := record["name"].(string)
+			if search != "" && !strings.Contains(strings.ToLower(name), search) {
+				continue
+			}
+			if cat := q.Get("category"); cat != "" && fmt.Sprint(record["category"]) != cat {
+				continue
+			}
+			if q.Has("tags") {
+				tags, _ := record["tags"].([]string)
+				if !slices.Contains(tags, q.Get("tags")) {
+					continue
+				}
+			}
+			results = append(results, record)
+		}
+		writeJSON(w, http.StatusOK, paginated(results))
 
 	case strings.HasPrefix(path, "/api/part/") && (r.Method == http.MethodGet || r.Method == http.MethodPatch):
 		pk, ok := partDetailPK(path)
@@ -872,5 +897,31 @@ func TestSetPartImageRejectsNonImage(t *testing.T) {
 	}
 	if fake.uploadedImage != nil {
 		t.Error("nothing should have been uploaded")
+	}
+}
+
+// TestListAndSearchPartsFindExistingParts guards issue #8: a ?tags= on the part
+// list is a tag filter, so sending tags=true made both tools report "no parts"
+// for every query on a live instance.
+func TestListAndSearchPartsFindExistingParts(t *testing.T) {
+	fake := newFakeInvenTree()
+	fake.parts[791] = map[string]any{"pk": 791, "name": "AD8331ARQZ-R7", "category": 116}
+	fake.parts[812] = map[string]any{"pk": 812, "name": "LQW18AN110G00D", "category": 68}
+	session := connect(t, fake.start(t))
+
+	cases := []struct {
+		tool string
+		args map[string]any
+		want int
+	}{
+		{"search_parts", map[string]any{"search": "AD8331"}, 1},
+		{"list_parts", map[string]any{"category": 68}, 1},
+		{"list_parts", map[string]any{"limit": 5}, 2},
+	}
+	for _, tc := range cases {
+		out := callTool(t, session, tc.tool, tc.args)
+		if got := int(toFloat(out["count"])); got != tc.want {
+			t.Errorf("%s(%v) count = %d, want %d", tc.tool, tc.args, got, tc.want)
+		}
 	}
 }
