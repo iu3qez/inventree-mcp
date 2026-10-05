@@ -73,7 +73,10 @@ internal/
   DRF ignores unknown keys, so writing `remote_image` returns HTTP 200 and silently does nothing.
 - **Stock locations and part categories need a confirmation body on DELETE** - they put required
   fields on the delete serializer. Use `client.DeleteWithBody`, not `client.Delete`.
-- **Tags are off by default on read endpoints since v434**: pass `tags=true` to get them back.
+- **Tags are off by default on read endpoints since v434**: pass `tags=true` to get them back,
+  **on detail endpoints only**. On list endpoints (`/api/part/`, seen on API 530) a filterset `tags`
+  filter shadows the switch: any value is taken as a tag name and the list comes back empty with
+  HTTP 200 (issue #8). There is no way to get tags in list output.
 - **Companies require a currency on creation** and InvenTree does not default it on the API;
   `defaultCurrency` reads `/api/settings/global/INVENTREE_DEFAULT_CURRENCY/`.
 - **Parameter endpoints changed in API v430** (2025-12-04): `/api/part/parameter/` and

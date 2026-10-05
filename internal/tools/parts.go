@@ -59,13 +59,15 @@ type SearchPartsInput struct {
 func RegisterSearchParts(server *mcp.Server, c *client.Client, r *coerce.Registry) {
 	coerce.AddTool(server, r, &mcp.Tool{
 		Name:        "search_parts",
-		Description: "Search for parts by name, keyword, or description. Use this to find existing parts before creating new ones. Returns matching parts with their IDs, names, categories, and stock levels.",
+		Description: "Search for parts by name, keyword, or description. Use this to find existing parts before creating new ones. Returns matching parts with their IDs, names, categories, and stock levels. Tags are not included; use get_part for them.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input SearchPartsInput) (*mcp.CallToolResult, any, error) {
 		limit := input.Limit
 		if limit <= 0 {
 			limit = 25
 		}
-		path := fmt.Sprintf("/api/part/?search=%s&limit=%d&tags=true&format=json", url.QueryEscape(input.Search), limit)
+		// No tags=true here: on the list view InvenTree reads ?tags= as a tag
+		// filter, which empties the result (issue #8). Only get_part sends it.
+		path := fmt.Sprintf("/api/part/?search=%s&limit=%d&format=json", url.QueryEscape(input.Search), limit)
 		var resp client.PaginatedResponse[Part]
 		if err := c.Get(path, &resp); err != nil {
 			return errResult(fmt.Errorf("searching parts: %w", err)), nil, nil
@@ -349,13 +351,13 @@ type ListPartsInput struct {
 func RegisterListParts(server *mcp.Server, c *client.Client, r *coerce.Registry) {
 	coerce.AddTool(server, r, &mcp.Tool{
 		Name:        "list_parts",
-		Description: "List all parts, optionally filtered by category. Use search_parts for finding specific parts by name.",
+		Description: "List all parts, optionally filtered by category. Use search_parts for finding specific parts by name. Tags are not included; use get_part for them.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input ListPartsInput) (*mcp.CallToolResult, any, error) {
 		limit := input.Limit
 		if limit <= 0 {
 			limit = 50
 		}
-		path := fmt.Sprintf("/api/part/?limit=%d&offset=%d&tags=true&format=json", limit, input.Offset)
+		path := fmt.Sprintf("/api/part/?limit=%d&offset=%d&format=json", limit, input.Offset)
 		if input.Category != 0 {
 			path += fmt.Sprintf("&category=%d", input.Category)
 		}
