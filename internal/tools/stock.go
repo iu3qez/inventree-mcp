@@ -3,6 +3,8 @@ package tools
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"strings"
 
 	"github.com/chrisbotelho/inventree-mcp/internal/client"
 	"github.com/chrisbotelho/inventree-mcp/internal/coerce"
@@ -11,19 +13,20 @@ import (
 
 // StockItem represents an InvenTree stock item.
 type StockItem struct {
-	PK         int      `json:"pk"`
-	Part       int      `json:"part"`
-	Quantity   float64  `json:"quantity"`
-	Serial     *string  `json:"serial"`
-	Batch      string   `json:"batch"`
-	Location   *int     `json:"location"`
-	InStock    bool     `json:"in_stock"`
-	Status     int      `json:"status"`
-	StatusText string   `json:"status_text"`
-	Notes      *string  `json:"notes"`
-	Updated    string   `json:"updated"`
-	Tags       []string `json:"tags"`
-	PartDetail *struct {
+	PK           int      `json:"pk"`
+	Part         int      `json:"part"`
+	Quantity     float64  `json:"quantity"`
+	Serial       *string  `json:"serial"`
+	Batch        string   `json:"batch"`
+	Location     *int     `json:"location"`
+	SupplierPart *int     `json:"supplier_part"`
+	InStock      bool     `json:"in_stock"`
+	Status       int      `json:"status"`
+	StatusText   string   `json:"status_text"`
+	Notes        *string  `json:"notes"`
+	Updated      string   `json:"updated"`
+	Tags         []string `json:"tags"`
+	PartDetail   *struct {
 		PK       int    `json:"pk"`
 		Name     string `json:"name"`
 		FullName string `json:"full_name"`
@@ -96,12 +99,17 @@ type AddStockInput struct {
 	Batch    string  `json:"batch,omitempty" jsonschema:"Batch code"`
 	Serial   string  `json:"serial,omitempty" jsonschema:"Serial number (for trackable parts)"`
 	Notes    string  `json:"notes,omitempty" jsonschema:"Notes about this stock item"`
+
+	SupplierPart int    `json:"supplier_part,omitempty" jsonschema:"Supplier part ID (pk) the stock was bought as, from search_supplier_parts or get_part_sourcing. Links the stock item to it so the supplier part's in_stock counts it. Must belong to part."`
+	SKU          string `json:"SKU,omitempty" jsonschema:"Distributor SKU (e.g. LCSC C8574), resolved to the part's supplier part. Alternative to supplier_part."`
 }
 
 func RegisterAddStock(server *mcp.Server, c *client.Client, r *coerce.Registry) {
 	coerce.AddTool(server, r, &mcp.Tool{
-		Name:        "add_stock",
-		Description: "Add stock by creating a new stock item. Requires a part ID and quantity. Optionally specify a location. Use search_parts to find the part ID and search_stock_locations to find the location ID first.",
+		Name: "add_stock",
+		Description: "Add stock by creating a new stock item. Requires a part ID and quantity. Optionally specify a location. Use search_parts to find the part ID and search_stock_locations to find the location ID first. " +
+			"When booking in a distributor order, pass supplier_part (pk) or SKU so the stock is linked to the supplier part; " +
+			"otherwise the supplier part's in_stock stays at 0. The supplier part must belong to the given part.",
 		Annotations: &mcp.ToolAnnotations{
 			DestructiveHint: boolPtr(false),
 		},
@@ -122,6 +130,13 @@ func RegisterAddStock(server *mcp.Server, c *client.Client, r *coerce.Registry) 
 		if input.Notes != "" {
 			payload["notes"] = input.Notes
 		}
+		if input.SupplierPart != 0 || input.SKU != "" {
+			spID, err := resolveStockSupplierPart(c, input.Part, input.SupplierPart, input.SKU)
+			if err != nil {
+				return errResult(err), nil, nil
+			}
+			payload["supplier_part"] = spID
+		}
 
 		// InvenTree returns an array of created stock items
 		var created []StockItem
@@ -133,6 +148,57 @@ func RegisterAddStock(server *mcp.Server, c *client.Client, r *coerce.Registry) 
 		}
 		return jsonResult(created[0])
 	})
+}
+
+// resolveStockSupplierPart turns a supplier part pk and/or SKU into the pk of a
+// supplier part of partID. InvenTree accepts a supplier part of another part on
+// a stock item, so the ownership check has to happen here.
+func resolveStockSupplierPart(c *client.Client, partID, supplierPartID int, sku string) (int, error) {
+	sku = strings.TrimSpace(sku)
+	if supplierPartID != 0 {
+		var sp SupplierPart
+		if err := c.Get(fmt.Sprintf("/api/company/part/%d/?format=json", supplierPartID), &sp); err != nil {
+			return 0, fmt.Errorf("getting supplier part %d: %w", supplierPartID, err)
+		}
+		if sp.Part != partID {
+			return 0, fmt.Errorf("supplier part %d (SKU %s) belongs to part %d, not part %d", sp.PK, sp.SKU, sp.Part, partID)
+		}
+		if sku != "" && !strings.EqualFold(strings.TrimSpace(sp.SKU), sku) {
+			return 0, fmt.Errorf("supplier part %d has SKU %s, not %s", sp.PK, sp.SKU, sku)
+		}
+		return sp.PK, nil
+	}
+
+	// SKU narrows to exact matches where the filter exists; search keeps the
+	// result set small where it does not. The exact comparison below decides.
+	path := fmt.Sprintf("/api/company/part/?SKU=%s&search=%s&limit=50&format=json",
+		url.QueryEscape(sku), url.QueryEscape(sku))
+	var resp client.PaginatedResponse[SupplierPart]
+	if err := c.Get(path, &resp); err != nil {
+		return 0, fmt.Errorf("looking up SKU %s: %w", sku, err)
+	}
+	var mine []int
+	var others []string
+	for _, sp := range resp.Results {
+		if !strings.EqualFold(strings.TrimSpace(sp.SKU), sku) {
+			continue
+		}
+		if sp.Part == partID {
+			mine = append(mine, sp.PK)
+		} else {
+			others = append(others, fmt.Sprintf("supplier part %d on part %d", sp.PK, sp.Part))
+		}
+	}
+	switch {
+	case len(mine) == 1:
+		return mine[0], nil
+	case len(mine) > 1:
+		return 0, fmt.Errorf("SKU %s matches several supplier parts of part %d (%v): pass supplier_part instead", sku, partID, mine)
+	case len(others) > 0:
+		return 0, fmt.Errorf("SKU %s does not belong to part %d (found %s)", sku, partID, strings.Join(others, ", "))
+	default:
+		return 0, fmt.Errorf("no supplier part with SKU %s: create it with create_supplier_part first", sku)
+	}
 }
 
 // -- Update Stock Quantity --

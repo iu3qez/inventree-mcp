@@ -56,7 +56,7 @@ func (in IntakePartInput) hasSourcing() bool {
 func RegisterIntakePart(server *mcp.Server, c *client.Client, res *paramAPIResolver, r *coerce.Registry) {
 	coerce.AddTool(server, r, &mcp.Tool{
 		Name: "intake_part",
-		Description: "Register a component end to end in a single call: create (or enrich) the part, set its datasheet parameters, record manufacturer + MPN, record supplier + SKU, and optionally book initial stock. " +
+		Description: "Register a component end to end in a single call: create (or enrich) the part, set its datasheet parameters, record manufacturer + MPN, record supplier + SKU, and optionally book initial stock, linked to the supplier part. " +
 			"This is the tool for 'I have an LCSC/Mouser/Digi-Key code, put this component into InvenTree'. " +
 			"Companies are looked up by name and created only when missing; an existing supplier part with the same SKU is reused rather than duplicated. " +
 			"Steps are independent: if one fails the rest still run and the result lists what succeeded and what did not. " +
@@ -159,11 +159,13 @@ func RegisterIntakePart(server *mcp.Server, c *client.Client, res *paramAPIResol
 		}
 
 		// 4. Supplier part.
+		supplierPartID := 0
 		if input.Supplier != "" && input.SKU != "" {
 			sp, status, err := ensureSupplierPart(c, partID, manufacturerPartID, input)
 			if err != nil {
 				problems = append(problems, fmt.Sprintf("supplier part: %v", err))
 			} else {
+				supplierPartID = sp.PK
 				report["supplier_part"] = sp
 				report["supplier_part_status"] = status
 			}
@@ -177,7 +179,7 @@ func RegisterIntakePart(server *mcp.Server, c *client.Client, res *paramAPIResol
 			if location == 0 {
 				location = input.DefaultLocation
 			}
-			item, err := createIntakeStock(c, partID, input.InitialStock, location)
+			item, err := createIntakeStock(c, partID, supplierPartID, input.InitialStock, location)
 			if err != nil {
 				problems = append(problems, fmt.Sprintf("initial stock: %v", err))
 			} else {
@@ -365,11 +367,15 @@ func ensureSupplierPart(c *client.Client, partID, manufacturerPartID int, input 
 	return &created, "created", nil
 }
 
-// createIntakeStock books the initial stock quantity for a freshly taken-in part.
-func createIntakeStock(c *client.Client, partID int, quantity float64, location int) (*StockItem, error) {
+// createIntakeStock books the initial stock quantity for a freshly taken-in part,
+// linked to its supplier part when there is one so that its in_stock counts it.
+func createIntakeStock(c *client.Client, partID, supplierPartID int, quantity float64, location int) (*StockItem, error) {
 	payload := map[string]any{
 		"part":     partID,
 		"quantity": quantity,
+	}
+	if supplierPartID != 0 {
+		payload["supplier_part"] = supplierPartID
 	}
 	if location != 0 {
 		payload["location"] = location

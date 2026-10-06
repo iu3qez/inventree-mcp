@@ -36,6 +36,9 @@ type fakeInvenTree struct {
 	companies  map[string]map[string]any // lowercased name -> company record
 	parts      map[int]map[string]any    // pk -> part record
 
+	supplierParts map[int]map[string]any // pk -> supplier part record
+	stockBodies   []map[string]any       // bodies POSTed to /api/stock/
+
 	nextPK int
 }
 
@@ -51,7 +54,9 @@ func newFakeInvenTree() *fakeInvenTree {
 		parameters: map[int]string{},
 		companies:  map[string]map[string]any{},
 		parts:      map[int]map[string]any{},
-		nextPK:     100,
+
+		supplierParts: map[int]map[string]any{},
+		nextPK:        100,
 	}
 }
 
@@ -297,19 +302,42 @@ func (f *fakeInvenTree) handle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if r.Method == http.MethodPost {
-			writeJSON(w, http.StatusCreated, map[string]any{
-				"pk": f.pk(), "part": body["part"],
+			pk := f.pk()
+			record := map[string]any{
+				"pk": pk, "part": body["part"],
 				"supplier": body["supplier"], "SKU": body["SKU"],
 				"manufacturer_part": body["manufacturer_part"], "note": body["note"],
-			})
+			}
+			f.supplierParts[pk] = record
+			writeJSON(w, http.StatusCreated, record)
 			return
 		}
-		writeJSON(w, http.StatusOK, paginated(nil))
+		results := []map[string]any{}
+		sku := strings.ToLower(q.Get("SKU"))
+		search := strings.ToLower(q.Get("search"))
+		for _, record := range f.supplierParts {
+			s := strings.ToLower(fmt.Sprint(record["SKU"]))
+			if (sku == "" || s == sku) && strings.Contains(s, search) {
+				results = append(results, record)
+			}
+		}
+		writeJSON(w, http.StatusOK, paginated(results))
+
+	case strings.HasPrefix(path, "/api/company/part/") && r.Method == http.MethodGet:
+		pk, err := strconv.Atoi(strings.Trim(strings.TrimPrefix(path, "/api/company/part/"), "/"))
+		record, ok := f.supplierParts[pk]
+		if err != nil || !ok {
+			http.Error(w, "no such supplier part", http.StatusNotFound)
+			return
+		}
+		writeJSON(w, http.StatusOK, record)
 
 	// -- stock --
 	case path == "/api/stock/" && r.Method == http.MethodPost:
+		f.stockBodies = append(f.stockBodies, body)
 		writeJSON(w, http.StatusCreated, []map[string]any{{
 			"pk": f.pk(), "part": body["part"], "quantity": body["quantity"],
+			"supplier_part": body["supplier_part"],
 		}})
 
 	default:
@@ -589,6 +617,12 @@ func TestIntakePartEndToEnd(t *testing.T) {
 
 	if !fake.purchaseable(42) {
 		t.Error("a part created with sourcing data must be created purchaseable")
+	}
+
+	// The initial stock counts towards the supplier part it was bought as.
+	sp, _ := out["supplier_part"].(map[string]any)
+	if got, want := fake.stockBodies[0]["supplier_part"], sp["pk"]; got == nil || got != want {
+		t.Errorf("initial stock supplier_part = %v, want %v", got, want)
 	}
 
 	// Both companies are created once, with the right roles.
